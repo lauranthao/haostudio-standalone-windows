@@ -1,0 +1,94 @@
+# HAo Studio — Windows build (GitHub Actions).
+#
+# Trigger: every push to main, or manually from the
+# Actions tab (Run workflow).
+#
+# What it does (no tests here — the Dart tests run on the Linux VM,
+# where several widget tests hang; see the audit):
+#   1. windows-latest runner, Flutter 3.47.0 (the version the app
+#      builds with — keep in sync with the repo's Flutter version).
+#   2. flutter pub get + flutter analyze (0 issues required).
+#   3. flutter build windows --release
+#      → build/windows/x64/runner/Release/standalone.exe (+ data/).
+#   4. Zip the Release folder → HAoStudio-standalone-v1.1.5-windows.zip
+#      (the URL version-windows.json points at:
+#      https://chen-hao-shop-production.up.railway.app/HAoStudio-standalone-v1.1.5-windows.zip).
+#   5. Inno Setup (choco install innosetup) compiles
+#      windows/installer.iss → HAoStudio-standalone-v1.1.5-setup.exe
+#      (per-user install, no admin/UAC).
+#   6. Uploads both as artifacts (zip + setup exe, 90 days).
+#
+# Version note: artifact names read the version from pubspec.yaml
+# ("Read version from pubspec" step); windows/installer.iss takes it
+# via /DMyAppVersion and defaults to 1.1.5 when not passed. When the
+# app version bumps, only version-windows.json still needs a manual
+# update (exeBuild/exeSize) at release time.
+
+name: Windows build
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  build-windows:
+    runs-on: windows-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Flutter 3.47.0
+        uses: subosito/flutter-action@v2
+        with:
+          flutter-version: "3.47.0"
+          channel: "stable"
+          cache: true
+
+      - name: flutter pub get
+        run: flutter pub get
+
+      - name: flutter analyze
+        run: flutter analyze
+
+      - name: flutter build windows --release
+        run: flutter build windows --release
+
+      - name: Read version from pubspec
+        id: version
+        shell: pwsh
+        run: |
+          $version = (Select-String -Path pubspec.yaml -Pattern '^version: (.+)\\+').Matches.Groups[1].Value
+          "version=$version" >> $env:GITHUB_OUTPUT
+
+      - name: Zip the Release folder
+        shell: pwsh
+        run: |
+          Compress-Archive -Path build/windows/x64/runner/Release/* `
+            -DestinationPath HAoStudio-standalone-v${{ steps.version.outputs.version }}-windows.zip
+          Get-Item HAoStudio-standalone-v${{ steps.version.outputs.version }}-windows.zip |
+            Select-Object Name, Length
+
+      - name: Install Inno Setup
+        run: choco install innosetup -y
+
+      - name: Build the installer
+        shell: pwsh
+        run: |
+          & "C:\\Program Files (x86)\\Inno Setup 6\\ISCC.exe" /DMyAppVersion=${{ steps.version.outputs.version }} windows/installer.iss
+          Get-Item build/windows-installer/HAoStudio-standalone-v${{ steps.version.outputs.version }}-setup.exe |
+            Select-Object Name, Length
+
+      - name: Upload zip
+        uses: actions/upload-artifact@v4
+        with:
+          name: HAoStudio-standalone-v${{ steps.version.outputs.version }}-windows-zip
+          path: HAoStudio-standalone-v${{ steps.version.outputs.version }}-windows.zip
+          retention-days: 90
+
+      - name: Upload installer
+        uses: actions/upload-artifact@v4
+        with:
+          name: HAoStudio-standalone-v${{ steps.version.outputs.version }}-windows-setup
+          path: build/windows-installer/HAoStudio-standalone-v${{ steps.version.outputs.version }}-setup.exe
+          retention-days: 90
